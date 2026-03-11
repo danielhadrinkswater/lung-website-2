@@ -1,0 +1,976 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Lung Sounds Explorer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;1,9..144,300&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet" />
+
+  <style>
+    /* ============================================================
+       CSS VARIABLES
+       Strict two-colour palette:
+         --red:   matte red  → abnormal sounds + highlights
+         --green: matte dark green → normal sounds + highlights
+       ============================================================ */
+    :root {
+      --red:          #b94040;   /* matte red — abnormal */
+      --red-faint:    #f5eded;
+      --green:        #3a6b4a;   /* matte dark green — normal */
+      --green-faint:  #eaf1ec;
+
+      --bg:           #f4f4f2;
+      --surface:      #ffffff;
+      --surface-2:    #efefed;
+      --border:       #e2e2de;
+      --border-strong:#c8c8c4;
+
+      --text-primary:   #181818;
+      --text-secondary: #555552;
+      --text-muted:     #999994;
+
+      --radius-sm:  3px;
+      --radius-md:  8px;
+      --radius-lg:  12px;
+
+      --shadow-sm: 0 1px 3px rgba(0,0,0,.06);
+      --shadow-md: 0 3px 10px rgba(0,0,0,.08);
+
+      --transition-fast: 0.15s ease;
+
+      /* Header height — used to offset sticky panel top */
+      --header-h: 64px;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { font-size: 16px; -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+
+    body {
+      font-family: 'DM Sans', sans-serif;
+      font-weight: 400;
+      background: var(--bg);
+      color: var(--text-primary);
+      min-height: 100vh;
+    }
+
+    /* ============================================================
+       HEADER — slim, fixed height
+       ============================================================ */
+    .site-header {
+      height: var(--header-h);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 0 24px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+
+    .site-header h1 {
+      font-family: 'Fraunces', serif;
+      font-size: 20px;
+      font-weight: 300;
+      font-style: italic;
+      color: var(--text-primary);
+      letter-spacing: -0.01em;
+    }
+
+    .site-header .subtitle {
+      font-size: 12px;
+      color: var(--text-muted);
+      font-weight: 300;
+      margin-left: 14px;
+      padding-left: 14px;
+      border-left: 1px solid var(--border);
+      white-space: nowrap;
+    }
+
+    /* ============================================================
+       APP SHELL
+       Two-column layout on desktop:
+         Left: sticky diagram panel (fixed width)
+         Right: scrollable sound list
+       Single column on mobile (<=680px): diagram on top, list below.
+       ============================================================ */
+    .app-shell {
+      display: flex;
+      align-items: flex-start;
+      max-width: 980px;
+      margin: 0 auto;
+      padding: 0 20px;
+      gap: 24px;
+    }
+
+    /* ============================================================
+       DIAGRAM PANEL — sticky, left column on desktop
+       Stays in view while the user scrolls through sound cards.
+       ============================================================ */
+    .diagram-panel {
+      width: 260px;
+      flex-shrink: 0;
+
+      /* Sticky: stays at top (below header) as list scrolls */
+      position: sticky;
+      top: var(--header-h);
+      /* Height is viewport minus header so it never overflows */
+      height: calc(100vh - var(--header-h));
+
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px 16px;
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+    }
+
+    /* SVG */
+    #lung-svg {
+      width: 100%;
+      max-width: 200px;
+      height: auto;
+      display: block;
+      margin: 0 auto;
+    }
+
+    /* ============================================================
+       SVG REGION HIGHLIGHT SYSTEM
+       All regions start at opacity 0 (invisible).
+       JS adds .highlighted-normal   → matte green fill + glow
+       JS adds .highlighted-abnormal → matte red fill + glow
+       The fill colour is set via CSS class, not inline --region-color,
+       because we now have only two colours.
+       ============================================================ */
+    .svg-region {
+      opacity: 0;
+      transition: opacity 0.28s ease, filter 0.28s ease;
+    }
+
+    .svg-region.highlighted-normal {
+      opacity: 0.82;
+      filter: drop-shadow(0 0 6px rgba(58,107,74,.5));
+    }
+
+    .svg-region.highlighted-abnormal {
+      opacity: 0.82;
+      filter: drop-shadow(0 0 6px rgba(185,64,64,.5));
+    }
+
+    /* Normal regions use green fill (set inline) */
+    .svg-region.highlighted-normal  path,
+    .svg-region.highlighted-normal  rect { fill: var(--green); stroke: var(--green); }
+
+    /* Abnormal regions use red fill */
+    .svg-region.highlighted-abnormal path,
+    .svg-region.highlighted-abnormal rect { fill: var(--red); stroke: var(--red); }
+
+    /* Pleura regions are stroke-only — override fill to none */
+    .svg-region.is-pleura.highlighted-normal  path { fill: none; stroke: var(--green); }
+    .svg-region.is-pleura.highlighted-abnormal path { fill: none; stroke: var(--red);   }
+
+    /* Lung outlines always visible */
+    .lung-outline {
+      opacity: 1;
+      fill: none;
+      stroke: #aeaea8;
+      stroke-width: 1.6;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    /* ============================================================
+       DIAGRAM INFO — selected sound name + region shown below SVG
+       ============================================================ */
+    .diagram-info {
+      margin-top: 20px;
+      text-align: center;
+      min-height: 52px; /* reserve space so SVG doesn't jump */
+    }
+
+    .diagram-info .diag-name {
+      font-family: 'Fraunces', serif;
+      font-size: 15px;
+      font-weight: 300;
+      color: var(--text-primary);
+      line-height: 1.3;
+      margin-bottom: 4px;
+    }
+
+    .diagram-info .diag-region {
+      font-size: 10.5px;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      font-weight: 400;
+    }
+
+    /* Legend */
+    .diagram-legend {
+      display: flex;
+      gap: 14px;
+      margin-top: 18px;
+    }
+
+    .leg-item {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 10px;
+      color: var(--text-muted);
+      letter-spacing: 0.04em;
+    }
+
+    .leg-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    /* ============================================================
+       SOUND LIST — right column, scrollable
+       ============================================================ */
+    .sound-list {
+      flex: 1;
+      min-width: 0;
+      padding: 24px 0 80px;
+    }
+
+    /* Section label */
+    .section-label {
+      font-size: 10px;
+      font-weight: 500;
+      letter-spacing: 0.10em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      padding: 0 2px;
+      margin-bottom: 8px;
+      margin-top: 24px;
+    }
+
+    .section-label:first-child { margin-top: 0; }
+
+    /* Divider between sections */
+    .section-divider {
+      height: 1px;
+      background: var(--border);
+      margin: 20px 0 8px;
+    }
+
+    /* ============================================================
+       SOUND ROW — slim horizontal card
+       No overflow:hidden on the row itself (iOS Safari).
+       Left accent bar via ::before with border-radius.
+       ============================================================ */
+    .sound-row {
+      position: relative;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 11px 14px 11px 16px;
+      margin-bottom: 6px;
+      cursor: pointer;
+      transition: border-color var(--transition-fast),
+                  box-shadow var(--transition-fast),
+                  transform var(--transition-fast);
+      /* No overflow:hidden — iOS Safari */
+    }
+
+    /* Left accent bar via ::before — border-radius matches card */
+    .sound-row::before {
+      content: '';
+      position: absolute;
+      top: 0; bottom: 0; left: 0;
+      width: 3px;
+      border-radius: var(--radius-md) 0 0 var(--radius-md);
+      background: var(--row-accent, var(--border));
+      opacity: 0.5;
+      transition: opacity var(--transition-fast), width var(--transition-fast);
+    }
+
+    .sound-row:hover {
+      border-color: var(--border-strong);
+      box-shadow: var(--shadow-sm);
+      transform: translateX(2px);
+    }
+
+    .sound-row:hover::before { opacity: 0.9; }
+
+    .sound-row.active {
+      border-color: var(--row-accent, var(--border-strong));
+      box-shadow: var(--shadow-md);
+    }
+
+    .sound-row.active::before { opacity: 1; width: 4px; }
+
+    /* Type dot (red or green) */
+    .row-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      background: var(--row-accent, var(--border));
+    }
+
+    /* Sound name */
+    .row-name {
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-primary);
+      flex: 1;
+      min-width: 0;
+      white-space: nowrap;
+      /* No overflow:hidden — text must never be clipped (iOS) */
+    }
+
+    /* Tag */
+    .row-tag {
+      font-size: 11px;
+      color: var(--text-muted);
+      font-weight: 300;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    /* Play indicator — small waveform icon, visible on active row */
+    .row-play {
+      flex-shrink: 0;
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: var(--row-accent, var(--border));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      opacity: 0;
+      transition: opacity var(--transition-fast);
+    }
+
+    .sound-row:hover .row-play,
+    .sound-row.active .row-play { opacity: 1; }
+
+    .row-play svg {
+      width: 11px;
+      height: 11px;
+      fill: white;
+      pointer-events: none;
+    }
+
+    /* ============================================================
+       INFO DRAWER
+       Expands below the active row to show description + pills + audio.
+       Uses display:none → display:block toggle (no overflow:hidden).
+       ============================================================ */
+    .info-drawer {
+      display: none; /* toggled to block by JS */
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-top: none;
+      border-radius: 0 0 var(--radius-md) var(--radius-md);
+      padding: 14px 16px 16px;
+      margin-top: -6px;  /* overlap the row's bottom margin */
+      margin-bottom: 6px;
+    }
+
+    .drawer-description {
+      font-size: 13px;
+      line-height: 1.68;
+      color: var(--text-secondary);
+      font-weight: 300;
+      margin-bottom: 12px;
+    }
+
+    .drawer-conditions-label {
+      font-size: 10px;
+      font-weight: 500;
+      letter-spacing: 0.09em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      margin-bottom: 7px;
+    }
+
+    .drawer-pills {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+      margin-bottom: 14px;
+    }
+
+    .pill {
+      font-size: 11px;
+      font-weight: 400;
+      color: var(--text-secondary);
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-sm);
+      padding: 2px 8px;
+      white-space: nowrap;
+    }
+
+    /* Playback bar inside drawer */
+    .playback-bar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding-top: 12px;
+      border-top: 1px solid var(--border);
+    }
+
+    .play-btn {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      border: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      background: var(--row-accent, #888);
+      transition: opacity var(--transition-fast), transform var(--transition-fast);
+    }
+
+    .play-btn:hover  { opacity: 0.82; }
+    .play-btn:active { transform: scale(0.94); }
+
+    .play-btn svg {
+      width: 12px;
+      height: 12px;
+      fill: white;
+      pointer-events: none;
+    }
+
+    .playback-status {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .playback-status.playing     { color: var(--row-accent, #333); font-weight: 500; }
+    .playback-status.unavailable { color: var(--red); }
+
+    /* ============================================================
+       MOBILE — <=680px: stack diagram above list
+       ============================================================ */
+    @media (max-width: 680px) {
+      .site-header .subtitle { display: none; }
+
+      /* Switch to vertical stack */
+      .app-shell {
+        flex-direction: column;
+        gap: 0;
+        padding: 0;
+      }
+
+      /* Diagram panel: sticky strip at top, horizontal layout */
+      .diagram-panel {
+        width: 100%;
+        height: auto;
+        position: sticky;
+        top: var(--header-h);
+        flex-direction: row;
+        align-items: center;
+        justify-content: center;
+        gap: 20px;
+        padding: 16px 20px;
+        border-right: none;
+        border-bottom: 1px solid var(--border);
+        z-index: 90;
+      }
+
+      #lung-svg { max-width: 110px; }
+
+      .diagram-legend { margin-top: 0; flex-direction: column; gap: 6px; }
+
+      .diagram-info {
+        margin-top: 0;
+        text-align: left;
+        min-height: auto;
+      }
+
+      /* Sound list: full width, padded */
+      .sound-list {
+        width: 100%;
+        padding: 16px 16px 80px;
+      }
+
+      /* Row tag hidden on very small screens to save space */
+      @media (max-width: 400px) {
+        .row-tag { display: none; }
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ============================================================
+       HEADER
+       ============================================================ -->
+  <header class="site-header">
+    <h1>Lung Sounds Explorer</h1>
+    <span class="subtitle">Select a sound to highlight anatomy &amp; play audio</span>
+  </header>
+
+  <div class="app-shell">
+
+    <!-- ============================================================
+         DIAGRAM PANEL — sticky
+         SVG regions start invisible. JS adds .highlighted-normal or
+         .highlighted-abnormal based on the selected sound's type.
+         ============================================================ -->
+    <aside class="diagram-panel">
+
+      <svg id="lung-svg" viewBox="0 0 260 230" xmlns="http://www.w3.org/2000/svg"
+           role="img" aria-label="Lung anatomy diagram">
+
+        <!-- TRACHEA & CARINA -->
+        <g id="svg-trachea" class="svg-region">
+          <rect x="122" y="10" width="16" height="40" rx="6" fill="#888"/>
+          <path d="M122 50 Q110 62 96 70"  stroke="#888" stroke-width="4" fill="none" stroke-linecap="round"/>
+          <path d="M138 50 Q150 62 164 70" stroke="#888" stroke-width="4" fill="none" stroke-linecap="round"/>
+        </g>
+
+        <!-- LUNG OUTLINES (always visible) -->
+        <path class="lung-outline" d="M96 70 Q80 80 70 100 Q58 125 58 148 Q58 175 68 192 Q80 210 96 215 Q112 218 120 210 Q128 200 128 185 L128 90 Q128 78 122 72 Z"/>
+        <path class="lung-outline" d="M164 70 Q180 80 190 100 Q202 125 202 148 Q202 175 192 192 Q180 210 164 215 Q148 218 140 210 Q132 200 132 185 L132 90 Q132 78 138 72 Z"/>
+
+        <!-- LEFT BRONCHUS -->
+        <g id="svg-bronchi-left" class="svg-region">
+          <path d="M96 70 Q84 80 80 95 Q80 108 88 112"  stroke="#888" stroke-width="3.5" fill="none" stroke-linecap="round"/>
+          <path d="M88 112 Q82 120 80 130"              stroke="#888" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+          <path d="M88 112 Q96 116 98 126"              stroke="#888" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+        </g>
+
+        <!-- RIGHT BRONCHUS -->
+        <g id="svg-bronchi-right" class="svg-region">
+          <path d="M164 70 Q176 80 180 95 Q180 108 172 112" stroke="#888" stroke-width="3.5" fill="none" stroke-linecap="round"/>
+          <path d="M172 112 Q178 120 180 130"               stroke="#888" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+          <path d="M172 112 Q164 116 162 126"               stroke="#888" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+        </g>
+
+        <!-- LEFT PARENCHYMA -->
+        <g id="svg-parenchyma-left" class="svg-region">
+          <path d="M96 70 Q80 80 70 100 Q58 125 58 148 Q58 175 68 192 Q80 210 96 215 Q112 218 120 210 Q128 200 128 185 L128 90 Q128 78 122 72 Z"
+                fill="#888" stroke="none"/>
+        </g>
+
+        <!-- RIGHT PARENCHYMA -->
+        <g id="svg-parenchyma-right" class="svg-region">
+          <path d="M164 70 Q180 80 190 100 Q202 125 202 148 Q202 175 192 192 Q180 210 164 215 Q148 218 140 210 Q132 200 132 185 L132 90 Q132 78 138 72 Z"
+                fill="#888" stroke="none"/>
+        </g>
+
+        <!-- LEFT BASE -->
+        <g id="svg-bases-left" class="svg-region">
+          <path d="M62 160 Q60 175 68 192 Q80 210 96 215 Q112 218 120 210 Q128 200 128 185 L128 160 Z"
+                fill="#888" stroke="none"/>
+        </g>
+
+        <!-- RIGHT BASE -->
+        <g id="svg-bases-right" class="svg-region">
+          <path d="M198 160 Q200 175 192 192 Q180 210 164 215 Q148 218 140 210 Q132 200 132 185 L132 160 Z"
+                fill="#888" stroke="none"/>
+        </g>
+
+        <!-- LEFT PLEURA (stroke only) -->
+        <g id="svg-pleura-left" class="svg-region is-pleura">
+          <path d="M93 68 Q75 78 64 100 Q51 127 51 150 Q51 178 63 196 Q77 215 96 220 Q116 223 126 212 Q134 202 134 185 L134 88 Q134 75 127 69 Z"
+                fill="none" stroke="#888" stroke-width="2" stroke-dasharray="5 3"/>
+        </g>
+
+        <!-- RIGHT PLEURA (stroke only) -->
+        <g id="svg-pleura-right" class="svg-region is-pleura">
+          <path d="M167 68 Q185 78 196 100 Q209 127 209 150 Q209 178 197 196 Q183 215 164 220 Q144 223 134 212 Q126 202 126 185 L126 88 Q126 75 133 69 Z"
+                fill="none" stroke="#888" stroke-width="2" stroke-dasharray="5 3"/>
+        </g>
+
+        <!-- Fissure hints -->
+        <path class="lung-outline" d="M75 130 Q82 128 90 130" stroke-dasharray="3 2" stroke-width="1"/>
+        <path class="lung-outline" d="M185 130 Q178 128 170 130" stroke-dasharray="3 2" stroke-width="1"/>
+      </svg>
+
+      <!-- Info below SVG: updates when a sound is selected -->
+      <div class="diagram-info" id="diagram-info">
+        <p class="diag-name" id="diag-name" style="color:var(--text-muted); font-style:italic; font-size:13px;">Select a sound</p>
+        <p class="diag-region" id="diag-region"></p>
+      </div>
+
+      <!-- Legend -->
+      <div class="diagram-legend">
+        <div class="leg-item">
+          <div class="leg-dot" style="background:var(--green)"></div>
+          Normal
+        </div>
+        <div class="leg-item">
+          <div class="leg-dot" style="background:var(--red)"></div>
+          Abnormal
+        </div>
+      </div>
+
+    </aside>
+
+    <!-- ============================================================
+         SOUND LIST — scrollable right column
+         Sounds are injected here by JS as slim rows.
+         Each row has an expandable info drawer below it.
+         ============================================================ -->
+    <main class="sound-list" id="sound-list"></main>
+
+  </div>
+
+  <audio id="audio-player"></audio>
+
+  <script>
+  /* ============================================================
+     SOUND DATA
+     type: "normal" | "abnormal"  → controls colour everywhere
+     region: which SVG elements highlight
+     ============================================================ */
+  const lungSounds = {
+    vesicular: {
+      file: 'sounds/vesicular.mp3',
+      name: 'Vesicular',
+      description: 'Soft, low-pitched sounds heard over most lung fields. Inspiration is longer than expiration with no pause between phases. Produced by airflow through peripheral small airways — the hallmark of healthy lung tissue.',
+      diseases: ['Healthy lung', 'Normal baseline'],
+      region: 'normal',
+      type: 'normal',
+      tag: 'Soft · Low-pitched'
+    },
+    bronchial: {
+      file: 'sounds/bronchial.mp3',
+      name: 'Bronchial',
+      description: 'Loud, high-pitched sounds normally heard over the trachea and manubrium. Expiration is longer than inspiration with a distinct pause. When heard peripherally, they suggest consolidation.',
+      diseases: ['Normal over trachea', 'Lobar pneumonia', 'Consolidation'],
+      region: 'bronchi',
+      type: 'normal',
+      tag: 'Loud · High-pitched · Tubular'
+    },
+    bronchovesicular: {
+      file: 'sounds/bronchovesicular.mp3',
+      name: 'Bronchovesicular',
+      description: 'Intermediate between bronchial and vesicular in pitch and intensity. Inspiration and expiration are roughly equal in duration. Normally heard near the main bronchi — 1st to 2nd intercostal spaces anteriorly, or between the scapulae posteriorly.',
+      diseases: ['Normal over main bronchi', 'Early consolidation'],
+      region: 'bronchi',
+      type: 'normal',
+      tag: 'Intermediate · Equal phases'
+    },
+    wheeze: {
+      file: 'sounds/wheeze.mp3',
+      name: 'Wheeze',
+      description: 'Continuous, musical, high-pitched sounds from narrowed or obstructed airways. Predominantly expiratory but may be biphasic. Polyphonic wheezes suggest diffuse narrowing; a monophonic wheeze may indicate fixed obstruction.',
+      diseases: ['Asthma', 'COPD', 'Anaphylaxis', 'Foreign body aspiration'],
+      region: 'bronchi',
+      type: 'abnormal',
+      tag: 'Continuous · High-pitched'
+    },
+    crackles: {
+      file: 'sounds/crackles.mp3',
+      name: 'Crackles / Rales',
+      description: 'Discontinuous, non-musical sounds from sudden opening of collapsed airways or fluid-filled alveoli during inspiration. Fine crackles resemble Velcro peeling; coarse crackles are louder and lower-pitched. Typically heard at the bases.',
+      diseases: ['Pulmonary fibrosis', 'Pulmonary oedema', 'Pneumonia', 'Heart failure'],
+      region: 'alveoli',
+      type: 'abnormal',
+      tag: 'Discontinuous · Inspiratory'
+    },
+    rhonchi: {
+      file: 'sounds/rhonchi.mp3',
+      name: 'Rhonchi',
+      description: 'Low-pitched, continuous, rumbling sounds from secretions or dynamic narrowing in larger airways. Predominantly expiratory. May clear with coughing — unlike crackles. Suggests mucus hypersecretion or endobronchial pathology.',
+      diseases: ['Chronic bronchitis', 'COPD exacerbation', 'Bronchiectasis'],
+      region: 'bronchi',
+      type: 'abnormal',
+      tag: 'Continuous · Low-pitched'
+    },
+    stridor: {
+      file: 'sounds/stridor.mp3',
+      name: 'Stridor',
+      description: 'A high-pitched, harsh, monophonic sound from turbulent airflow through a critically narrowed upper airway. Predominantly inspiratory, often audible without a stethoscope. A medical emergency until a reversible cause is excluded.',
+      diseases: ['Croup', 'Epiglottitis', 'Tracheal stenosis', 'Foreign body', 'Anaphylaxis'],
+      region: 'trachea',
+      type: 'abnormal',
+      tag: 'Inspiratory · Harsh · Monophonic'
+    },
+    pleuralRub: {
+      file: 'sounds/pleural-rub.mp3',
+      name: 'Pleural Friction Rub',
+      description: 'A coarse, grating sound when inflamed pleural surfaces move against each other during breathing. Heard in both phases, does not clear with coughing. Disappears if a pleural effusion develops and separates the surfaces.',
+      diseases: ['Pleuritis', 'Pulmonary embolism', 'Pneumonia with pleuritis', 'Mesothelioma'],
+      region: 'pleura',
+      type: 'abnormal',
+      tag: 'Biphasic · Grating'
+    },
+    decreasedBS: {
+      file: 'sounds/decreased-breath-sounds.mp3',
+      name: 'Decreased Breath Sounds',
+      description: 'Reduced or absent sounds from diminished airflow, increased chest-wall distance, or attenuated transmission. Best appreciated by comparing symmetrical zones. Unilateral decrease warrants further workup.',
+      diseases: ['Pleural effusion', 'Pneumothorax', 'COPD', 'Obesity', 'Consolidation'],
+      region: 'parenchyma',
+      type: 'abnormal',
+      tag: 'Reduced amplitude'
+    }
+  };
+
+  /* ============================================================
+     REGION → SVG element IDs
+     ============================================================ */
+  const regionToSVGIds = {
+    trachea:    ['svg-trachea'],
+    bronchi:    ['svg-bronchi-left', 'svg-bronchi-right'],
+    alveoli:    ['svg-bases-left', 'svg-bases-right'],
+    pleura:     ['svg-pleura-left', 'svg-pleura-right'],
+    parenchyma: ['svg-parenchyma-left', 'svg-parenchyma-right'],
+    normal:     ['svg-parenchyma-left', 'svg-parenchyma-right', 'svg-bases-left', 'svg-bases-right']
+  };
+
+  /* Region display labels */
+  const regionLabel = {
+    trachea:    'Trachea / Upper Airway',
+    bronchi:    'Bronchi',
+    alveoli:    'Alveoli / Lung Bases',
+    pleura:     'Pleura',
+    parenchyma: 'Lung Parenchyma',
+    normal:     'All Lung Fields'
+  };
+
+  /* Colour constants */
+  const RED   = '#b94040';
+  const GREEN = '#3a6b4a';
+
+  /* ============================================================
+     STATE
+     ============================================================ */
+  let activeKey    = null;
+  let activeRow    = null;
+  let activeDrawer = null;
+  let isPlaying    = false;
+
+  const audioPlayer    = document.getElementById('audio-player');
+  const diagName       = document.getElementById('diag-name');
+  const diagRegion     = document.getElementById('diag-region');
+
+  /* play/pause icons are inside the active drawer — looked up dynamically */
+
+  /* ============================================================
+     SVG HIGHLIGHT SYSTEM
+     Clears all highlights, then applies the correct class
+     (highlighted-normal or highlighted-abnormal) based on sound type.
+     ============================================================ */
+  function highlightRegions(region, type) {
+    document.querySelectorAll('.svg-region').forEach(el => {
+      el.classList.remove('highlighted-normal', 'highlighted-abnormal');
+    });
+
+    const cls = type === 'normal' ? 'highlighted-normal' : 'highlighted-abnormal';
+    (regionToSVGIds[region] || []).forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.classList.add(cls);
+    });
+  }
+
+  /* ============================================================
+     PLAYBACK STATE
+     Operates on whichever drawer is currently open.
+     ============================================================ */
+  function setPlaybackState(state) {
+    isPlaying = (state === 'playing');
+
+    if (!activeDrawer) return;
+    const playIcon    = activeDrawer.querySelector('.play-icon');
+    const pauseIcon   = activeDrawer.querySelector('.pause-icon');
+    const statusEl    = activeDrawer.querySelector('.playback-status');
+    const playBtnEl   = activeDrawer.querySelector('.play-btn');
+
+    if (playIcon)  playIcon.style.display  = isPlaying ? 'none'  : 'block';
+    if (pauseIcon) pauseIcon.style.display = isPlaying ? 'block' : 'none';
+
+    const map = { idle: 'Click to play', playing: 'Playing…', paused: 'Paused', finished: 'Finished', unavailable: 'File not available' };
+    if (statusEl) {
+      statusEl.className   = 'playback-status';
+      statusEl.textContent = map[state] || '';
+      if (state === 'playing')     statusEl.classList.add('playing');
+      if (state === 'unavailable') statusEl.classList.add('unavailable');
+    }
+
+    /* Update the row-level play button icon too */
+    if (activeRow) {
+      const rowPlay = activeRow.querySelector('.row-play svg');
+      if (rowPlay) {
+        rowPlay.innerHTML = isPlaying
+          ? '<rect x="4" y="3" width="4" height="10" rx="1"/><rect x="10" y="3" width="4" height="10" rx="1"/>'
+          : '<path d="M3 2l10 6-10 6V2z"/>';
+      }
+    }
+  }
+
+  audioPlayer.addEventListener('ended', () => setPlaybackState('finished'));
+  audioPlayer.addEventListener('error', () => setPlaybackState('unavailable'));
+
+  /* ============================================================
+     BUILD SOUND ROWS + DRAWERS
+     Each sound gets a .sound-row and an immediately-following
+     .info-drawer. The drawer is display:none by default and
+     toggled to display:block when its row is selected.
+     ============================================================ */
+  function buildList() {
+    const list = document.getElementById('sound-list');
+
+    /* Group into normal / abnormal */
+    const normal   = Object.entries(lungSounds).filter(([,s]) => s.type === 'normal');
+    const abnormal = Object.entries(lungSounds).filter(([,s]) => s.type === 'abnormal');
+
+    function renderGroup(entries, labelText) {
+      const lbl = document.createElement('p');
+      lbl.className   = 'section-label';
+      lbl.textContent = labelText;
+      list.appendChild(lbl);
+
+      entries.forEach(([key, sound]) => {
+        const accentColor = sound.type === 'normal' ? GREEN : RED;
+
+        /* --- ROW --- */
+        const row = document.createElement('article');
+        row.className = 'sound-row';
+        row.setAttribute('role', 'button');
+        row.setAttribute('tabindex', '0');
+        row.setAttribute('aria-expanded', 'false');
+        row.setAttribute('aria-label', sound.name);
+        row.style.setProperty('--row-accent', accentColor);
+
+        row.innerHTML = `
+          <div class="row-dot"></div>
+          <span class="row-name">${sound.name}</span>
+          <span class="row-tag">${sound.tag}</span>
+          <div class="row-play">
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M3 2l10 6-10 6V2z"/>
+            </svg>
+          </div>
+        `;
+
+        /* --- DRAWER --- */
+        const drawer = document.createElement('div');
+        drawer.className = 'info-drawer';
+        drawer.setAttribute('role', 'region');
+        drawer.setAttribute('aria-label', `Details for ${sound.name}`);
+        drawer.style.setProperty('--row-accent', accentColor);
+
+        const pillsHTML = sound.diseases
+          .map(d => `<span class="pill">${d}</span>`)
+          .join('');
+
+        drawer.innerHTML = `
+          <p class="drawer-description">${sound.description}</p>
+          <p class="drawer-conditions-label">Associated conditions</p>
+          <div class="drawer-pills">${pillsHTML}</div>
+          <div class="playback-bar">
+            <button class="play-btn" aria-label="Play or pause ${sound.name}" style="--row-accent:${accentColor}">
+              <svg class="play-icon" viewBox="0 0 24 24"><path d="M5 3l14 9-14 9V3z"/></svg>
+              <svg class="pause-icon" viewBox="0 0 24 24" style="display:none">
+                <rect x="6" y="4" width="4" height="16" rx="1"/>
+                <rect x="14" y="4" width="4" height="16" rx="1"/>
+              </svg>
+            </button>
+            <span class="playback-status">Click to play</span>
+          </div>
+        `;
+
+        /* Play button inside drawer */
+        const playBtnEl = drawer.querySelector('.play-btn');
+        playBtnEl.addEventListener('click', (e) => {
+          e.stopPropagation();
+          if (isPlaying) {
+            audioPlayer.pause();
+            setPlaybackState('paused');
+          } else {
+            audioPlayer.play().catch(() => setPlaybackState('unavailable'));
+            setPlaybackState('playing');
+          }
+        });
+
+        /* Row click handler */
+        function handleSelect() {
+          if (activeKey === key) {
+            /* Clicking active row: toggle drawer open/closed */
+            if (activeDrawer.style.display === 'block') {
+              audioPlayer.pause();
+              audioPlayer.currentTime = 0;
+              setPlaybackState('idle');
+              activeDrawer.style.display = 'none';
+              row.setAttribute('aria-expanded', 'false');
+              row.classList.remove('active');
+              /* Clear diagram */
+              document.querySelectorAll('.svg-region').forEach(el => {
+                el.classList.remove('highlighted-normal', 'highlighted-abnormal');
+              });
+              diagName.textContent  = 'Select a sound';
+              diagName.style.color  = 'var(--text-muted)';
+              diagName.style.fontStyle = 'italic';
+              diagRegion.textContent = '';
+              activeKey    = null;
+              activeRow    = null;
+              activeDrawer = null;
+            }
+            return;
+          }
+
+          /* Deactivate previous */
+          audioPlayer.pause();
+          audioPlayer.currentTime = 0;
+          if (activeRow)    { activeRow.classList.remove('active'); activeRow.setAttribute('aria-expanded', 'false'); }
+          if (activeDrawer) { activeDrawer.style.display = 'none'; }
+
+          /* Activate this one */
+          activeKey    = key;
+          activeRow    = row;
+          activeDrawer = drawer;
+
+          row.classList.add('active');
+          row.setAttribute('aria-expanded', 'true');
+          drawer.style.display = 'block';
+
+          /* Diagram update */
+          highlightRegions(sound.region, sound.type);
+          diagName.textContent     = sound.name;
+          diagName.style.color     = accentColor;
+          diagName.style.fontStyle = 'normal';
+          diagRegion.textContent   = regionLabel[sound.region] || '';
+
+          /* Audio */
+          audioPlayer.src = sound.file;
+          audioPlayer.load();
+          audioPlayer.play()
+            .then(()  => setPlaybackState('playing'))
+            .catch(() => setPlaybackState('unavailable'));
+        }
+
+        row.addEventListener('click', handleSelect);
+        row.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleSelect(); }
+        });
+
+        list.appendChild(row);
+        list.appendChild(drawer);
+      });
+    }
+
+    renderGroup(normal,   'Normal Sounds');
+
+    const divider = document.createElement('div');
+    divider.className = 'section-divider';
+    list.appendChild(divider);
+
+    renderGroup(abnormal, 'Adventitious Sounds');
+  }
+
+  /* Init */
+  buildList();
+  </script>
+
+</body>
+</html>
